@@ -280,6 +280,10 @@ Issues worth filing (or contributing upstream) because they unlock many ideas:
 
 ## 9. Suggested next steps
 
+0. Follow [`../GETTING_STARTED.md`](../GETTING_STARTED.md): run GM Breakout in Studio, then on
+   your glasses. Note that Studio refuses QR delivery without the `.review*` sidecars ("Missing
+   build review snapshot"), so builds must go through `build.py` with PyNaCl. Installed plugins
+   persist as saved entries in the App.
 1. **Pick 1–2 first projects** from §6 or §7.
 2. Set up the build in this repo: copy a starter from the SDK's `memomind-example-app` skill and get
    `./build.py web` green here. Add the toolchain + PyNaCl for `glass` builds.
