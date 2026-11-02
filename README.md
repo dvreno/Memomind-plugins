@@ -3,6 +3,12 @@
 Plugins and research for the **MemoMind One** smart glasses, built on the official
 [MemoMind Plugin Open Platform](https://github.com/memomind-open/plugin-open-platform).
 
+## Plugins
+
+| Plugin | What it does | Status |
+| --- | --- | --- |
+| [Agent Dashboard](plugins/agent-dashboard/) | Claude Code activity on the HUD; nod/shake to answer permission prompts | Phases 1–2 built; simulator-tested, awaiting glasses |
+
 ## Documentation
 
 | Document | What's in it |
