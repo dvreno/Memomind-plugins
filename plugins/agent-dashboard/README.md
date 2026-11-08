@@ -1,0 +1,229 @@
+# Agent Dashboard
+
+See what Claude Code is doing on your MemoMind glasses, and answer its permission
+prompts with your head: **nod = allow, shake = deny.**
+
+```
+Claude Code (MacBook)                Cloudflare Worker              MemoMind App (phone)         Glasses
+  hooks ──── events / asks ────────▶  relay (Durable Object)  ◀──── long-poll ──── Web plugin ──▶ HUD text
+  hook  ◀─── allow / deny ─────────   pending asks            ◀──── answer ─────── nod / shake / button
+```
+
+| Part | Path | Runs on |
+| --- | --- | --- |
+| Relay | [`relay/`](relay/) | Cloudflare Workers (free plan), one Durable Object |
+| Hook | [`hook/memomind-hook.mjs`](hook/memomind-hook.mjs) | Your computer, called by Claude Code |
+| Phone plugin | [`phone/`](phone/) | MemoMind App WebView. Draws through the stock `web_bridge` glasses plugin, so there's no C code |
+
+Status: phases 1 (status feed) and 2 (approvals). Tested with unit tests, end-to-end tests
+against a local Worker, and the PhoneSDK Browser Studio. **Not yet tested on real glasses.**
+
+## What you see
+
+| Idle | Approval | High-risk approval |
+| --- | --- | --- |
+| `AGENTS 14:05` + each session's state and last action, plus the last finished task | Project · session, the action (`Run command` / `npm run build`), `NOD = allow  SHAKE = deny  87s` | `!! HIGH RISK`, and after a nod: `PRESS BUTTON to confirm (5s)` |
+
+Controls on the glasses:
+
+| Input | Effect |
+| --- | --- |
+| Nod | Allow (normal risk) or arm (high risk) |
+| Shake | Deny |
+| Single click | Confirm an armed high-risk approval. Never approves on its own |
+| Double click | Next waiting approval, when there are several |
+
+The phone page shows the same approvals with Allow/Deny buttons, so you can use the phone as a fallback.
+
+## Safety rules
+
+- **Nothing is approved by default.** No answer within `MEMOMIND_ASK_TIMEOUT` (90 s) means **deny**.
+  Set `MEMOMIND_TIMEOUT_ACTION=prompt` to fall back to the normal terminal prompt instead.
+- If the relay is down or misconfigured, the hook prints nothing, so Claude Code shows its normal prompt.
+- **High risk** needs a nod and then a button press within 5 s. This covers `rm -rf`, force or
+  protected-branch pushes, `git reset --hard`, `sudo`, `curl | sh`, deploy/publish, `terraform apply`,
+  `kubectl delete`, `DROP TABLE`, and writes outside the project or to `.env`/keys.
+  The list is in [`hook/lib.mjs`](hook/lib.mjs).
+- Gestures are ignored for 0.8 s after a card appears, so a nod that was already happening can't count.
+- Secrets (API keys, tokens, passwords, private keys) are redacted before anything leaves your machine.
+- One shared token (≥24 chars) protects the relay. Compared in constant time; CORS open, auth by header.
+- Claude Code's own deny rules still apply: an allow from the glasses can't override them.
+
+## Setup
+
+You need Node 18+, a free Cloudflare account, and the
+[plugin-open-platform](https://github.com/memomind-open/plugin-open-platform) toolkit for Studio.
+
+### 1. Deploy the relay
+
+```sh
+cd plugins/agent-dashboard/relay
+npm install
+npx wrangler login
+openssl rand -hex 24               # copy this token
+npx wrangler secret put RELAY_TOKEN   # paste it
+npx wrangler deploy                # note the https://memomind-agent-relay.<you>.workers.dev URL
+curl https://memomind-agent-relay.<you>.workers.dev/health   # {"ok":true}
+```
+
+### 2. Install the Claude Code hook (MacBook)
+
+```sh
+mkdir -p ~/.claude/memomind
+cp plugins/agent-dashboard/hook/*.mjs ~/.claude/memomind/
+```
+
+Merge [`hook/settings.example.json`](hook/settings.example.json) into `~/.claude/settings.json`
+(user-level, so it covers every project). Fill in your relay URL and token. Status hooks run with
+`"async": true`, so they never slow Claude down. The `PermissionRequest` hook waits for your answer.
+
+Turn it off temporarily with `MEMOMIND_DISABLED=1`.
+Use `MEMOMIND_DEBUG=1` to print hook diagnostics to stderr.
+
+### 3. Run the phone plugin
+
+Build the package first. This copies MemoMind's Web SDK from your toolkit checkout into
+`phone/vendor/`. The SDK isn't committed here because MemoMind keeps the rights to it:
+
+```sh
+cd plugins/agent-dashboard
+MEMOMIND_SDK=~/path/to/plugin-open-platform npm run package   # → dist/agent-dashboard-0.1.0.mmpkg
+```
+
+**Simulator (no glasses needed):** in Desktop Studio, import the toolkit workspace and use
+*Import package* to load `dist/agent-dashboard-<version>.mmpkg`. Pick **GM Web Bridge** as the glasses plugin. Open the phone page, enter the relay URL and
+token, then press **Save & connect**. Studio has no nod/shake controls, so answer with the phone
+buttons there.
+
+**On glasses (needs Developer Workspace):** scan Studio's QR code from App › Settings › Memo Lab ›
+Developer Workspace. The plugin is saved in the App, so later you just tap *Start*.
+
+### 4. Try it
+
+Start Claude Code anywhere and ask it to do something that needs permission (for example run a
+command that isn't allowlisted). The card appears on the glasses within about a second.
+
+## Development
+
+```sh
+cd plugins/agent-dashboard
+MEMOMIND_SDK=/path/to/plugin-open-platform npm run setup   # vendor the Web SDK into phone/vendor/ (gitignored)
+npm test                                       # 31 unit tests (relay, hook, HUD logic)
+
+# local relay
+cd relay && echo 'RELAY_TOKEN=local-dev-token-0123456789abcdef' > .dev.vars && npx wrangler dev
+
+# end-to-end: real hook script + phone relay client against the local relay
+RELAY_TOKEN=local-dev-token-0123456789abcdef npm run test:e2e
+
+# Browser Studio smoke test (Playwright): nod / nod+button / shake through the simulator
+node <SDK>/PhoneSDK/tools/run-browser-studio.mjs --plugin "$PWD/phone" --port 4173
+RELAY_TOKEN=local-dev-token-0123456789abcdef OUT_DIR=/tmp npm run test:studio
+
+# package the phone plugin with the official packager
+MEMOMIND_SDK=/path/to/plugin-open-platform npm run package   # → dist/agent-dashboard-0.1.0.mmpkg
+```
+
+`phone/index.html` allows `connect-src https://*.workers.dev` (plus localhost:8787 for development).
+If you put the relay on a custom domain, add it there.
+
+### Relay API
+
+All routes except `/health` need `Authorization: Bearer <RELAY_TOKEN>`.
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/health` | anyone | liveness |
+| POST | `/v1/events` | hook | `{kind, session, project, title, text}` with kind = session, prompt, tool, notify, done, error, status |
+| POST | `/v1/asks` | hook | `{title, detail, risk, session, project, timeoutMs}` → `{ask}` |
+| GET | `/v1/asks/:id?wait=ms` | hook | long-poll (≤25 s) for `state`: pending, allow, deny, expired, cancelled |
+| POST | `/v1/asks/:id/cancel` | hook | withdraw an ask (hook timed out) |
+| POST | `/v1/asks/:id/answer` | phone | `{decision: allow\|deny, via}`. 409 if already resolved |
+| GET | `/v1/feed?since=seq&wait=ms` | phone | long-poll for new events and the current pending asks |
+
+## Voice conversations (phase 5)
+
+Talk to your Claude Code session through the glasses. Speech-to-text and text-to-speech
+run locally on your Mac with [audio.cpp](https://github.com/0xShug0/audio.cpp) on Metal.
+
+```
+You speak ─▶ glasses mic ─▶ phone (Ogg Opus, ≤15 s) ─▶ relay ─▶ Mac: ffmpeg → Qwen3-ASR 1.7B ─▶ text
+Claude replies ─▶ Mac: Kokoro TTS → MP3 ─▶ relay ─▶ phone plays it + HUD captions (paged)
+```
+
+- **Voice mode (Stop hook).** With voice mode on, every time Claude finishes a turn its reply is
+  shown on the HUD as captions and spoken by Kokoro. **Click** the glasses button to talk, **click
+  again** to send (or it sends at 15 s), and **shake** to end the conversation. Your words are
+  transcribed on the Mac and handed back to the *same* session as the next instruction. If you
+  say nothing within 180 s the session stops normally. Turn head left/right to page long captions.
+- **`glasses_converse` MCP tool.** Claude can start a spoken exchange mid-task and get your answer
+  back as text.
+- The phone page also has a text box, so you can type replies (useful in Studio, which can't
+  simulate the glasses mic).
+
+Measured on an M1 Max (warm): Kokoro ≈ 0.4 s for a 5 s sentence; Qwen3-ASR 1.7B ≈ 0.5 s per reply.
+The first request after the server starts loads the model (5–15 s).
+
+### Setup (macOS)
+
+```sh
+brew tap 0xShug0/audio-cpp && brew trust 0xShug0/audio-cpp && brew install audio-cpp espeak-ng ffmpeg
+mkdir -p ~/MemoMind/audio-models && cd ~/MemoMind/audio-models
+audiocpp_model_manager install kokoro_82m_bf16 --models-dir .
+audiocpp_model_manager install qwen3_asr_1_7b_q8_0 --models-dir .
+```
+
+`~/.claude/memomind/audiocpp-server.json`:
+
+```json
+{
+  "host": "127.0.0.1", "port": 8089, "backend": "metal", "lazy_load": true,
+  "models": [
+    { "id": "kokoro", "family": "kokoro_tts", "task": "tts", "mode": "offline",
+      "path": "/Users/YOU/MemoMind/audio-models/Kokoro-82M-GGUF/kokoro-82m-bf16.gguf",
+      "default_voice_preset": { "voice_id": "af_heart" } },
+    { "id": "qwen3-asr", "family": "qwen3_asr", "task": "asr", "mode": "offline",
+      "path": "/Users/YOU/MemoMind/audio-models/Qwen3-ASR-1.7B-GGUF" }
+  ]
+}
+```
+
+```sh
+audiocpp_server --config ~/.claude/memomind/audiocpp-server.json --log-file ~/.claude/memomind/audiocpp-server.log &
+cp hook/*.mjs ~/.claude/memomind/
+node ~/.claude/memomind/voicectl.mjs on      # or off / status
+```
+
+Register the voice Stop hook (synchronous; it exits in ~0.1 s when voice mode is off):
+
+```json
+"Stop": [{ "hooks": [{ "type": "command", "command": "node \"$HOME/.claude/memomind/memomind-voice-hook.mjs\"", "timeout": 600 }] }]
+```
+
+Options: `MEMOMIND_TTS=off` (captions only, replies still transcribed), `MEMOMIND_TTS_VOICE`
+(any Kokoro voice id), `MEMOMIND_VOICE_TIMEOUT` (seconds, default 180),
+`MEMOMIND_AUDIOCPP_URL` (default `http://127.0.0.1:8089`).
+
+Tests: `node test/voice-e2e.mjs` (needs `RELAY_URL`, `RELAY_TOKEN`, a running audio.cpp server,
+and macOS `say`, which plays the user's voice).
+
+**Unverified until real glasses:** whether the phone routes Claude's audio to the glasses speaker
+(the SDK has no speaker-routing API; captions always work), mic quality outdoors, and whether
+recording works with the phone locked.
+
+## Known limits / to verify on hardware
+
+1. **Foreground only.** The MemoMind App must be open with the plugin running. We don't yet know whether
+   it keeps polling with the phone locked. This is the first thing to test on device.
+2. Gesture thresholds and firmware text wrapping differ from the simulator. Tune `SETTLE_MS` and the
+   layout in [`phone/screen.js`](phone/screen.js).
+3. Long-press is avoided on purpose, because it exits plugins.
+4. One relay = one user. The relay isn't designed for sharing between people.
+5. If this is ever submitted for MemoMind review/distribution, their terms (§8.5) require disclosing any
+   AI providers used. This plugin calls no AI itself; it only relays Claude Code's own prompts.
+
+## Roadmap
+
+- ~~Phase 3: MCP server~~ done: `glasses_notify`, `glasses_ask`, `glasses_converse` (see `hook/memomind-mcp.mjs`).
+- Phase 4: custom `.gmp` with icons, history scrolling and ring support.
+- ~~Phase 5: voice replies~~ done (see Voice conversations above).
