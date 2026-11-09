@@ -9,6 +9,12 @@ Plugins and research for the **MemoMind One** smart glasses, built on the offici
 | --- | --- | --- |
 | [Agent Dashboard](plugins/agent-dashboard/) | Claude Code activity on the HUD; nod/shake to answer permission prompts | Phases 1–3 and 5 built (status, approvals, MCP tools, voice); phase 4 (native HUD with history + ring) next |
 
+## Tools
+
+| Tool | What it does |
+| --- | --- |
+| [OpenClaw Doctor](tools/openclaw-doctor/) | Diagnoses why the glasses can't reach an OpenClaw gateway (approvals, phone Tailscale, multi-agent 400) and includes a model-rewriting SSE proxy |
+
 ## Documentation
 
 | Document | What's in it |

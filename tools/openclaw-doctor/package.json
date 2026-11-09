@@ -1,0 +1,16 @@
+{
+  "name": "openclaw-doctor",
+  "version": "0.1.0",
+  "description": "Diagnose why MemoMind glasses can't reach an OpenClaw gateway, plus a tiny model-rewriting SSE proxy for multi-agent gateways.",
+  "type": "module",
+  "bin": {
+    "openclaw-doctor": "bin/openclaw-doctor.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
