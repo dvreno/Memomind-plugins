@@ -45,7 +45,9 @@ other things).
 - **Bluetooth bandwidth is the limit.** Expect about 200–500 ms per frame; real-time video won't
   work. Staff's recipe: pack two pixels per byte, compress with LZ4, send only the tiles that
   changed, and draw text and shapes on the glasses. Measured: 105 KB per frame drops to 1.5–8 KB,
-  about 2 fps. The simulator isn't rate-limited, so always test on hardware.
+  about 2 fps. Other builders report about **1 fps full-screen** over SPP, and about 5 fps for a
+  whole PC screen over Tailscale (showcase, 2026-10-24 / 11-09). The simulator isn't rate-limited,
+  so always test on hardware.
 - **Input is HOGP only.** Proprietary BLE controllers don't work. Known to work: D06 / D06 Pro ring
   mice, an XGIMI remote, the KiWear ring. No cursor X/Y stream yet.
 - **Distribution:** you need the whitelist (rounds 1–2 were in October; round 3 is "later in
@@ -80,7 +82,8 @@ From the Discord showcase and dev channels:
 | Home | Home Assistant integrations (dynag; George's HA + OpenClaw + Claude) |
 | Clients | gm_glasses_flutter (native BLE client), custom APKs replacing the companion app (AI Bridge, Alfred) |
 | Korean community | GLOW OS Plus and its forks (launcher-style suites) |
-| Games | Step-based pixel RPG, voice wizard duel, chess and Game Boy emulator concepts |
+| Games | Step-based pixel RPG, voice wizard duel, memo-doom (DOOM, phone as controller), chess and Game Boy emulator concepts |
+| More from showcase (late Oct–Nov) | Ticker / CodecCast / Drive HUD / Desk, glass-desktop (PC screen over Tailscale), workout counter, PDF and recording players, Gemini Live via Tasker, Tesla HUDs, Todoist + Muse connector. One builder wrote a custom renderer because classic LZ4 was too slow. Another runs an OpenClaw proxy so all agents are reachable. **No shared render, voice or input library yet.** |
 
 The gaps are mostly **plumbing** that every one of these projects rebuilt by hand, plus a few
 long-standing complaints nobody has fixed.
@@ -96,7 +99,7 @@ today's SDK. **Effort**: S ≈ 1–3 days, M ≈ 1–2 weeks, L longer.
 |---|---|---|---|---|---|
 | 1 | **OpenClaw Doctor + routing proxy:** checks reachability, approval state and the Tailscale path; explains "Initialization returned false" and prints the `openclaw devices/nodes approve` commands; rewrites `model: "openclaw"` → `"openclaw/main"` for multi-agent gateways | 5 | 5 | S | The most repeated unsolved dev-support thread. The fix is a hand-rolled ~25-line proxy and the app has no setting for it. It's a companion CLI, not a glasses plugin. |
 | 2 | **HUD render kit (JS library):** Canvas/HTML → 4-bit green → LZ4 → changed tiles; text layout for 600×350; an asset loader that sends images over Bluetooth after launch | 5 | 5 | M | Every visual plugin rebuilds staff's recipe, and the post-launch asset path avoids the 500 KiB `Import failed` error. |
-| 3 | **Voice I/O kit:** mic driver that stays open (works around `PERMISSION_DENIED`), Opus → PCM, a pluggable streaming STT adapter, H5 TTS playback, push-to-talk on button or ring | 5 | 4 → 5 once the background-capture update ships | M | No speech-to-text or TTS for plugins, Memo AI is off-limits, and the mic is the top dev-support topic. |
+| 3 | **Voice I/O kit:** mic driver that stays open (works around `PERMISSION_DENIED`), Opus → PCM, a pluggable streaming STT adapter, TTS playback (H5 audio, or Android's native TTS, which already plays through the glasses speakers), push-to-talk on button or ring | 5 | 4 → 5 once the background-capture update ships | M | No speech-to-text or TTS for plugins, Memo AI is off-limits, and the mic is the top dev-support topic. |
 | 4 | **Controller tester + input abstraction:** shows live which HID buttons a device sends and whether it's HOGP; one API covering button, head gestures and rings | 5 | 4 | S | "Will my remote work?" comes up all the time (Galaxy Watch, WowMouse, 8BitDo, R08, Chromecast remote) and nothing answers it. |
 | 5 | **"Next Up" calendar card** from a private iCal / CalDAV feed, with multiple accounts | 4 | 5 | S | Google linking is broken for some users, events go missing on the glasses, and only one Google account is allowed. |
 | 6 | **Paged agent reader:** scrollback, ring paging, an LLM summary of long output, and "what's it waiting for?" | 4 | 4 | M | The top Terminal Mode complaints (too fast, no scrollback). Ship it as a library and coordinate with Agent Mirror. |
