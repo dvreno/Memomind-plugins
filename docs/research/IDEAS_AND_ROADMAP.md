@@ -1,292 +1,161 @@
 # MemoMind Plugin Ideas, Feasibility & Roadmap
 
-Synthesis of three research documents (read them for evidence and citations):
+Date: **2026-11-09**. This replaces the 2026-11-01 version, which was written before we had the full
+history of the official Memomind Discord. That version is still in git history (`git log -- docs/research/IDEAS_AND_ROADMAP.md`).
 
-- [`memomind-glasses.md`](memomind-glasses.md) — the product, its features, ecosystem and shortcomings
-- [`competitive-landscape.md`](competitive-landscape.md) — other smart glasses, what users want, emerging ideas
-- [`../sdk/SDK_OVERVIEW.md`](../sdk/SDK_OVERVIEW.md) — what the SDK actually exposes (file:line evidence)
+Sources:
+- **Memomind Discord knowledge base:** private repo `dvreno/memomind-dev-kb`, local copy at
+  `../../../discord-kb`. It has staff answers, bugs and fixes, community projects and the
+  official changelog, each tagged with date and author. It refreshes daily.
+- [`../sdk/SDK_OVERVIEW.md`](../sdk/SDK_OVERVIEW.md): what the SDK exposes, with file:line evidence.
+- [`memomind-glasses.md`](memomind-glasses.md) and [`competitive-landscape.md`](competitive-landscape.md):
+  product and market research.
 
-Date: 2026-11-01. SDK reference: `memomind-open/plugin-open-platform` @ `171098b`.
-
-> Method note: this is product/market research, not an academic project, so the formal
-> research-superpowers phases (design doc → pre-registered plan → BibTeX library) were
-> deliberately skipped. Every factual claim lives, with a source, in the three documents above;
-> this file is opinion and planning built on them. Where an idea from the competitor research
-> conflicts with the SDK's real limits, the SDK wins and the idea is corrected here.
+Where these disagree, **staff statements in Discord win over the SDK docs, which win over market
+research**. Discord facts below cite `(date, author)`. Details are in the KB.
 
 ---
 
-## 1. The platform in one page
+## 1. The platform in one page (corrected)
 
-**MemoMind One** (XGIMI spin-off, CES 2026, $399 street / $599 list): 46.6 g, binocular
-monochrome-green micro-LED waveguide, **600×350 4-bit greyscale @ 30 Hz**, 25° FOV, 2,000 nits,
-3 mics, speakers, 6-axis IMU, one button, ~16 h battery. **No camera, no Wi-Fi, no GPS.**
-Tethered to the phone over Bluetooth.
-
-Two plugin types, which can pair over app-defined Bluetooth channels:
+**MemoMind One:** a binocular monochrome-green HUD at **600×350, 4-bit (16 levels)**, rendered with
+**LVGL** on the glasses. Both lenses show the same image; there's no 3D or parallax API
+(2026-10-23, memo fly fish). It has 3 mics, speakers, a 6-axis IMU and one button. There's **no
+camera** (and none planned for App Workspace v1), no Wi-Fi, no GPS, and no eye or blink sensors. It
+connects to the phone over Bluetooth (Classic SPP for recording and the companion link, BLE for
+other things).
 
 | | Phone **Web plugin** (`.mmpkg`) | Glasses **native plugin** (`.gmp`) |
 | --- | --- | --- |
-| Runs on | Official App's WebView (iOS/Android) | 32-bit RISC-V MCU (WuQi WQ7036), from Flash |
-| Language | HTML / JS (any bundler, vanilla or framework) | C (gnu99, `-Werror`, no libc, no C++) |
-| Can use | Internet (`fetch`), phone GPS, **glasses mic (Opus 16 kHz)**, storage + files, button / IMU events, draw on HUD (via `web_bridge`) | LVGL subset, raw framebuffer, button, IMU (raw + gestures), BLE HID accessories (ring, gamepad, keyboard), battery, wear sensor |
-| Can't use | Background execution, notifications, contacts/calendar, speaker routing, raw BLE | Mic, speaker, network, persistent storage, wall clock, threads |
-| Limits | 10 MB package, foreground only | ≤500 KiB code, <100 KiB static RAM, 1 KiB stack frame, 1 plugin at a time |
+| Runs on | Official app's WebView (iOS/Android) | RISC-V MCU, from Flash |
+| Language | HTML / JS | C (gnu99, no libc) |
+| Can use | `fetch`, phone GPS (**foreground only**), glasses mic (raw **Opus**) via `gm.audio.openCapture/openRecording` (`audio.capture` permission, noise-reduction modes), storage, button/IMU events, HUD text + LZ4 4-bit images via the Web Bridge, H5 `<audio>` playback | LVGL subset, framebuffer, button, IMU, **HOGP** HID input (rings, remotes, keyboards), battery, wear sensor, TLV data from the phone plugin |
+| Can't use | **Memo AI** (by design), notifications/SMS/contacts, raw BLE to other devices, RSSI, camera | Mic, network, persistent storage, wall clock |
+| Limits | 10 MB package | **500 KiB Flash** (else `Import failed: Operation failed`), <100 KiB RAM, 1 plugin at a time |
 
-Distribution today: **sideload only**, via Desktop Studio (Windows/macOS only — no Linux binary)
-→ QR code → App › Memo Lab › Developer Workbench. Developer Workspace is allowlist-only (App
-1.3.81). No marketplace, no signing yet. Every glasses build also escrows encrypted source for
-MemoMind review.
+**What changed since the old version** (all from Discord):
+- **Background works better than we thought.** The WebView keeps running when the app is
+  backgrounded, and `suspended` is only a lifecycle notice, not a stop signal (2026-10-27, memo fly
+  fish).
+- iOS background audio was fixed in app **1.3.82**. Android background mic with the screen off
+  (`PERMISSION_DENIED`) is getting its fix in the next app version, due the week of 2026-11-09
+  (MemoMind-aiwen). Until then, open the mic while the screen is on and keep it open.
+- **Plugins can't call Memo AI.** MemoMind exposes the hardware, and you bring your own AI. When you
+  use the SDK audio API, no speech-to-text happens on MemoMind's side (2026-09-30, Memo William).
+- **Bluetooth bandwidth is the limit.** Expect about 200–500 ms per frame; real-time video won't
+  work. Staff's recipe: pack two pixels per byte, compress with LZ4, send only the tiles that
+  changed, and draw text and shapes on the glasses. Measured: 105 KB per frame drops to 1.5–8 KB,
+  about 2 fps. The simulator isn't rate-limited, so always test on hardware.
+- **Input is HOGP only.** Proprietary BLE controllers don't work. Known to work: D06 / D06 Pro ring
+  mice, an XGIMI remote, the KiWear ring. No cursor X/Y stream yet.
+- **Distribution:** you need the whitelist (rounds 1–2 were in October; round 3 is "later in
+  November") and app ≥ 1.3.81. Plugins launch **only** from Settings → Memo Lab → Developer
+  Workbench, not from Quick Launch or the glasses. There's no store and no sharing. No Linux
+  Studio.
 
-### The four facts that shape every idea
-
-1. **Intelligence lives on the phone/cloud.** Audio only reaches the Web plugin; the MCU cannot
-   hear. Any speech, sound or AI feature = phone-side JS + cloud/WASM, glasses = display.
-2. **Foreground only.** Web plugins stop when the App is hidden. "Always-on ambient" features
-   are fragile until MemoMind adds background execution.
-3. **No camera.** Anything visual-recognition (faces, objects, OCR of the world, ASL recognition)
-   is out. That is also the privacy selling point.
-4. **Input is scarce.** One button + head gestures, or a BLE ring/gamepad. Design every
-   interaction for ≤4 inputs; nod/shake for yes/no is a natural fit.
-
----
-
-## 2. Built-in features vs. gaps
-
-| Area | MemoMind ships | Gap / complaint → opportunity |
-| --- | --- | --- |
-| AI assistant | "Hi Memo", undisclosed multi-LLM | Slow, unreliable wake word, no model choice → **bring-your-own assistant** (Claude/GPT/Gemini) plugin. Community already hacks Gemini Live in via Tasker. |
-| Captions | Live captions | No speaker labels (diarization), struggles in groups → **diarized captions** |
-| Translation | 26–53 languages, lag, censors profanity | → configurable engine, uncensored mode, phrasebook/learning overlay |
-| Memory (Memo+ $19.99/mo) | Moments, Wishes, long-term search | "Creepy", inaccurate attribution, no recording indicator, subscription fatigue → **privacy-first, user-owned memory** (opt-in, push-to-capture, local/own-cloud storage) |
-| Teleprompter | Basic | → voice-tracked scrolling, talking points from docs, pace meter |
-| Navigation | Started only from the phone | No transit, coarse → **walking + transit boards** via phone GPS in a Web plugin |
-| Notifications | Mirrored, 4 lines | No triage, no replies; plugins can't read notifications → only via service-specific APIs (Slack, Gmail, Matrix) |
-| Dashboard | Head-tilt widgets, RSS, calendar | No third-party widgets → custom dashboard plugin |
-| Agents | Memo Agent, OpenClaw | → generic **MCP bridge / agent HUD** |
-| Controls | Single button, misclicks | → ring/gamepad support everywhere, nod/shake confirmation patterns |
-
----
-
-## 3. What we can and can't build
-
-### ✅ Can build today
-- Text-first glanceable apps of any kind (dashboards, readers, timers, checklists, flashcards).
-- Anything driven by phone internet + phone GPS (weather, transit, sports, stocks, Home Assistant, Notion/Obsidian/Todoist, RSS, calendars via their web APIs).
-- Speech features using glasses mic → phone → cloud STT/LLM (captions, translation, assistants, meeting notes, coaching, teleprompter tracking).
-- Native C games and UIs with LVGL or raw framebuffer (Tetris/DOOM-class already exist).
-- IMU-driven interaction (head gestures, posture, head-pointer cursor, motion games).
-- BLE accessory input (KiWear ring, gamepads, keyboards, clickers) to native plugins.
-- Images/animations streamed from phone as LZ4 GRAY_4 tiles (QR codes, charts, maps as images, simple video-ish animation).
-- Third-party native clients speaking the public BLE business protocols (HUD text, teleprompter, mic Opus stream, HOGP) — e.g. a desktop app that drives the HUD directly.
-
-### ⚠️ Partially / with workarounds
-- **Always-on/ambient** features — only while the App's plugin is in the foreground.
-- **Audio output** — no TTS/playback API; browser `<audio>`/Web Speech may route over HFP, OS decides. Treat audio feedback as best-effort.
-- **On-device (offline) speech** — Whisper/Vosk via WASM in a WebView is possible but heavy on phone battery; cloud is the practical default.
-- **Wall-clock time on glasses** — must be sent from the phone.
-- **Persisting glasses state** — store on phone (`gm.storage`) and resync on load.
-- **Navigation maps** — render as image tiles from the phone; turn-by-turn arrows are easy, real maps are bandwidth-heavy.
-- **Sharing plugins with others** — LAN sideload via Studio; no store until MemoMind ships one.
-
-### ❌ Can't build (blocked by hardware or SDK)
-- Camera anything: face recognition, object ID, visual OCR, ASL recognition, photo capture.
-- Reading phone notifications/SMS/contacts/call control from a plugin.
-- Replacing the "Hi Memo" wake word or firmware behaviours; OTA, power, charging control.
-- Mic access or on-MCU audio ML in a `.gmp` (mic is phone-only).
-- Haptics/vibration (none found).
-- Running multiple plugins concurrently / background widgets on glasses.
-- Colour graphics.
-- Installing to glasses without the official App (install wire protocol is withheld).
-- Running/simulating `.gmp` on Linux with the official Studio (Windows/macOS only).
+### What shapes every idea
+1. **Intelligence lives on your phone or your own cloud.** Glasses are display plus input.
+   Bring your own speech-to-text, LLM and TTS.
+2. **Bandwidth, not pixels, is the budget.** Design for text and small changes, not full-frame
+   redraws.
+3. **Input is scarce.** Plan for 3–4 buttons (single button, head nod/shake, or a HOGP ring).
+4. **Glances, not sessions.** The community's lessons: design for ~15-second looks, use dense
+   notation (P:34, 1-for-4), and put a brightness control on every screen because of glare.
+   Head-motion navigation causes neck strain, so prefer the ring or arrow keys.
+5. **Launch friction is real.** It takes several taps to reach a plugin. Plugins that run all day
+   and get started once beat plugins you open many times a day.
 
 ---
 
-## 4. Tech stacks
+## 2. What already exists (don't duplicate; reuse or coordinate)
 
-**Phone side (Web plugin)**
-- Vanilla JS or TypeScript + esbuild/Vite producing a static bundle; keep it small (10 MB cap). PhoneSDK ships `gm-plugin-web-sdk.esm.js`.
-- UI on phone: plain HTML/CSS, Preact/Lit/Svelte (light frameworks suit the WebView).
-- HUD rendering: `gm.display.updateText` for ≤16 text objects; for rich layouts render to an offscreen `<canvas>` → quantise to 4-bit grey → LZ4 → `updateFrameImageLz4` tiles. A shared **HUD-canvas helper** is worth building once.
-- Speech-to-text: Deepgram / AssemblyAI / Speechmatics (streaming + diarization), OpenAI or Gemini realtime; offline fallback whisper.cpp-WASM / Vosk-WASM.
-- Opus handling: PhoneSDK `opusRecordingToOgg`; for streaming decode, `opus-decoder` (WASM) → PCM if the STT needs PCM.
-- LLM: Claude API (latest Claude models) for summarisation, assistants, coaching; tool use/MCP for agent features.
-- Secrets: never put API keys in the `.mmpkg`. Use a tiny proxy (Cloudflare Workers / Vercel functions) or let users paste their own key into `gm.storage`.
+From the Discord showcase and dev channels:
 
-**Glasses side (native plugin)**
-- C gnu99, xPack `riscv-none-elf-gcc` 15.2.0-1 (auto-downloaded by `build.py`), CMake + Ninja, PyNaCl.
-- Firmware LVGL subset (labels, arcs, lines, 4-bit images, frame animation, 2 fonts) or raw framebuffer slices.
-- Fixed-point/float (`rv32imafc` has single-precision FPU), static allocation, no blocking.
+| Area | Existing community work |
+|---|---|
+| Agents | Agent Mirror (therealharpreet, one agent on the lens, nod or ring to pick; to be open-sourced), memomind-terminal-hermes, Hermes agent apps, Memo Agent / Terminal Mode (official) |
+| Captions / conversation | IRIS (live conversation assistant), "Encyclopedia" (detects questions and shows answers) |
+| Navigation | Navigaze (turn-by-turn), Wayfinder HUD, HelmHud (boating) |
+| Productivity | PomoTime and other Pomodoro apps, Matrix client, smart replies, a sports/fantasy ticker (Sleeper API) |
+| Home | Home Assistant integrations (dynag; George's HA + OpenClaw + Claude) |
+| Clients | gm_glasses_flutter (native BLE client), custom APKs replacing the companion app (AI Bridge, Alfred) |
+| Korean community | GLOW OS Plus and its forks (launcher-style suites) |
+| Games | Step-based pixel RPG, voice wizard duel, chess and Game Boy emulator concepts |
 
-**Backend (optional)**
-- Cloudflare Workers + Durable Objects (WebSocket relay for agents/MCP), or Vercel/Supabase. Storage for user-owned memory: Supabase/Postgres+pgvector, or user's own Notion/Obsidian.
-
-**Dev environment**
-- This cloud container: can build Web plugins and (after installing PyNaCl + toolchain) `.gmp` files.
-- To preview/install `.gmp`: Windows or macOS machine with Desktop Studio + glasses + App (allowlisted Developer Workspace).
+The gaps are mostly **plumbing** that every one of these projects rebuilt by hand, plus a few
+long-standing complaints nobody has fixed.
 
 ---
 
-## 5. Big list of ideas
+## 3. Ranked: plugins and tools the community needs
 
-Legend — **Arch**: W = Web plugin, G = glasses native, W+G = paired, +C = needs a cloud service.
-**Feas**: ✅ now · ⚠️ with caveats · 🔒 blocked until MemoMind adds an API. **Effort**: S (days) · M (1–3 weeks) · L (month+).
+**Need** is 1–5, based on how often it comes up in Discord. **Feasibility** is 1–5 against
+today's SDK. **Effort**: S ≈ 1–3 days, M ≈ 1–2 weeks, L longer.
 
-### A. Communication & accessibility
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 1 | **Diarized live captions** — speaker tags ("A:", "B:", or learned names), confidence fade, nod = rewind 30 s | W+C | ✅ | M |
-| 2 | Captions + translation side-by-side, uncensored mode, pick engine | W+C | ✅ | M |
-| 3 | Sound-awareness alerts (doorbell, alarm, baby, name called) via phone-side audio classifier (YAMNet-WASM) | W | ⚠️ foreground | M |
-| 4 | Text → ASL fingerspelling / gloss slides for learners | W | ✅ | S |
-| 5 | Conversation "lost the thread" recap: tap → last 60 s summarised | W+C | ✅ | S |
-| 6 | Accent/fast-speaker slow-down: captions with key-term highlighting | W+C | ✅ | M |
-| 7 | Silent reply: dictate → refine with LLM → copy/send via web APIs (Slack, Telegram bot, Matrix) | W+C | ✅ | M |
-| 8 | Lecture mode: captions + glossary of technical terms + exportable notes | W+C | ✅ | M |
+| Rank | Idea | Need | Feas. | Effort | Evidence / reasoning |
+|---|---|---|---|---|---|
+| 1 | **OpenClaw Doctor + routing proxy:** checks reachability, approval state and the Tailscale path; explains "Initialization returned false" and prints the `openclaw devices/nodes approve` commands; rewrites `model: "openclaw"` → `"openclaw/main"` for multi-agent gateways | 5 | 5 | S | The most repeated unsolved dev-support thread. The fix is a hand-rolled ~25-line proxy and the app has no setting for it. It's a companion CLI, not a glasses plugin. |
+| 2 | **HUD render kit (JS library):** Canvas/HTML → 4-bit green → LZ4 → changed tiles; text layout for 600×350; an asset loader that sends images over Bluetooth after launch | 5 | 5 | M | Every visual plugin rebuilds staff's recipe, and the post-launch asset path avoids the 500 KiB `Import failed` error. |
+| 3 | **Voice I/O kit:** mic driver that stays open (works around `PERMISSION_DENIED`), Opus → PCM, a pluggable streaming STT adapter, H5 TTS playback, push-to-talk on button or ring | 5 | 4 → 5 once the background-capture update ships | M | No speech-to-text or TTS for plugins, Memo AI is off-limits, and the mic is the top dev-support topic. |
+| 4 | **Controller tester + input abstraction:** shows live which HID buttons a device sends and whether it's HOGP; one API covering button, head gestures and rings | 5 | 4 | S | "Will my remote work?" comes up all the time (Galaxy Watch, WowMouse, 8BitDo, R08, Chromecast remote) and nothing answers it. |
+| 5 | **"Next Up" calendar card** from a private iCal / CalDAV feed, with multiple accounts | 4 | 5 | S | Google linking is broken for some users, events go missing on the glasses, and only one Google account is allowed. |
+| 6 | **Paged agent reader:** scrollback, ring paging, an LLM summary of long output, and "what's it waiting for?" | 4 | 4 | M | The top Terminal Mode complaints (too fast, no scrollback). Ship it as a library and coordinate with Agent Mirror. |
+| 7 | **Community plugin index:** repo template, GitHub Action building `.gmp` / `.mmpkg`, QR install pages | 4 | 4 | S–M | There's no store, showcase posts share no source, and Discord CDN links expire. Installing still needs the whitelist. |
+| 8 | **Upstream fixes to the SDK repo:** `check_pair.py` accepting gm-review v3, a clear error for oversize packages, documenting the 500 KiB limit | 3 | 5 | S | Open bugs with no staff reply. Cheap and builds goodwill. |
+| 9 | **Desktop `.gmp` emulator** (Linux/macOS/Windows, SDL) with **real Bluetooth throttling** | 3 | 4 | L | There's no Linux Studio, and Studio isn't rate-limited, so it hides real performance. |
+| 10 | Find-my-phone / link-strength card | 3 | 2 | M | Requested, but there's no RSSI and no BLE bridge. Staff suggested sending a Bluetooth packet to the phone, and the API for that is unclear. |
 
-### B. AI assistants & agents
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 9 | **Bring-your-own assistant** (Claude/GPT/Gemini): button push-to-talk → answer on HUD, optional browser TTS | W+C | ✅ (no wake word) | S–M |
-| 10 | **Glasses MCP bridge**: cloud relay exposes `hud.show`, `hud.ask(yes/no)`, `mic.listen` as MCP tools to any agent | W+C | ✅ | M |
-| 11 | **Agent approval HUD**: Claude Code / CI / deploy prompts appear; nod = approve, shake = deny | W+C (+G optional) | ✅ | S–M |
-| 12 | Conversation context assistant: definitions, names, follow-up questions only on pauses | W+C | ✅ | M |
-| 13 | Meeting copilot: live action-item extraction, "you were asked a question" alert | W+C | ✅ | M |
-| 14 | Proactive "interruptibility" scheduler: queue non-urgent cards until IMU says you're still and nobody is speaking | W(+G) | ✅ | M |
-| 15 | Voice-to-plugin generator: describe a mini-app, LLM generates a Web plugin from the starter template | W+C (dev tool) | ⚠️ sideload | L |
-| 16 | Personal research assistant: ask about your own notes/library (RAG over Zotero/Obsidian export) | W+C | ✅ | M |
-
-### C. Memory & productivity
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 17 | **Privacy-first memory** — push-to-capture only, visible "REC" on HUD, user-owned storage (own Notion/Obsidian/Supabase), auto-expiry | W+C | ✅ | M |
-| 18 | Voice "who is this / what did we last discuss" from your own tagged notes (no face/voiceprint by default) | W+C | ✅ | M |
-| 19 | Teleprompter Pro: voice-tracked scroll, talking points from uploaded docs, WPM pace meter, slide-cue sync | W+C (+G) | ✅ | M |
-| 20 | Markdown/Obsidian/Notion reader with head-tracked scroll | W (+G) | ✅ | S |
-| 21 | Todoist/Things/Notion task HUD: next task, nod to complete | W+C | ✅ | S |
-| 22 | Calendar "next up" card + leave-now alerts (from web calendar APIs) | W+C | ✅ | S |
-| 23 | Recipe / procedure stepper (cooking, lab protocols, repair guides) with head-nod next | W (+G) | ✅ | S |
-| 24 | Checklist runner (pre-flight, packing, lab safety) | G or W | ✅ | S |
-| 25 | Clipboard / TOTP code viewer (2FA) | W | ✅ | S |
-| 26 | Quick capture: button → voice note → transcribed to inbox (Obsidian/Notion/email) | W+C | ✅ | S |
-
-### D. Navigation, travel & outdoors
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 27 | Walking turn-by-turn arrows + distance (OSRM/Mapbox, phone GPS) | W+C | ⚠️ foreground | M |
-| 28 | Live transit departure board for nearest stop (GTFS-RT, Transitland, local APIs) | W+C | ✅ | S–M |
-| 29 | Travel phrasebook + live translation for signs you read aloud | W+C | ✅ | S |
-| 30 | Hiking: bearing to waypoint, elevation, sunset countdown | W | ⚠️ foreground | M |
-| 31 | Cycling/running HUD: pace, distance, BLE heart-rate (via phone Web Bluetooth where supported) | W | ⚠️ | M |
-| 32 | Flight/train status card for your booked trips | W+C | ✅ | S |
-
-### E. Health, focus & wellbeing
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 33 | **Focus kit (ADHD-friendly)**: single-task HUD, Pomodoro, gentle re-focus nudges, time-blindness visual timer | G (+W) | ✅ | S–M |
-| 34 | IMU posture coach (head-forward detection) | G | ✅ | S |
-| 35 | 20-20-20 eye-break / screen-fatigue reminders using wear sensor | G | ✅ | S |
-| 36 | Breathing / box-breathing visual guide | G | ✅ | S |
-| 37 | Speech coach: filler-word counter, pace, volume (phone-side audio) | W+C | ✅ | M |
-| 38 | Medication / hydration reminders (phone-scheduled while App open) | W | ⚠️ foreground | S |
-| 39 | Workout interval timer with rep counter via IMU | G | ✅ | S |
-
-### F. Home, work & integrations
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 40 | Home Assistant HUD: state cards, nod to toggle scenes | W+C | ✅ | S–M |
-| 41 | Now playing + synced lyrics (Spotify/LRCLIB) | W+C | ✅ | S |
-| 42 | Dev dashboard: CI status, PR reviews, on-call alerts (GitHub/PagerDuty webhooks via relay) | W+C | ✅ | S–M |
-| 43 | Stock/crypto/sports live ticker | W+C | ✅ | S |
-| 44 | Presentation remote: ring/button advances slides on laptop + notes on HUD | W+C | ✅ | M |
-| 45 | Desktop companion (native BLE client): show laptop notifications / build output on HUD without the phone | native desktop app | ✅ via public BLE protocol | M–L |
-| 46 | Warehouse/field-work pick list with ring scanner input | W+G | ✅ | M |
-
-### G. Learning
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 47 | FSRS spaced-repetition flashcards (Anki deck import), nod = know / shake = again | W+G | ✅ | M |
-| 48 | Language immersion: overheard words → glossary + quiz later | W+C | ✅ | M |
-| 49 | Kanji/vocab ambient trainer | G (+W) | ✅ | S |
-| 50 | Reading companion: audiobook/podcast transcript sync on HUD | W+C | ⚠️ audio routing | M |
-
-### H. Games & fun (native showcase)
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 51 | Head-steered games (IMU tilt) — racer, maze, balance | G | ✅ | S–M |
-| 52 | Chess vs. engine (phone Stockfish-WASM) or vs. friend online | W+G | ✅ | M |
-| 53 | Multiplayer trivia/party game across several glasses wearers (cloud lobby) | W+C | ✅ | M |
-| 54 | Interactive fiction / text adventure with voice commands | W+C | ✅ | S–M |
-| 55 | "Codec call" stylised call UI (community request) | G | ⚠️ no call data | S |
-
-### I. Developer tooling & platform (high leverage — everyone benefits)
-| # | Idea | Arch | Feas | Effort |
-|---|---|---|---|---|
-| 56 | **Open-source `.gmp` host emulator for Linux/macOS/Windows** — implement the host/LVGL tables against SDL so plugins compile and run on desktop | tooling | ✅ (host build is plain C) | L |
-| 57 | **HUD-canvas library**: draw with Canvas2D/HTML → 4-bit dither → LZ4 tiles → diff updates | W lib | ✅ | M |
-| 58 | Text layout & pagination library for 600×350 (word wrap, CJK, scroll, ellipsis) | W + G lib | ✅ | M |
-| 59 | Widget kit for the LVGL subset (list, menu, button-focus model, toast, progress) | G lib | ✅ | M |
-| 60 | Community plugin index / "awesome-memomind" with build-and-QR pipeline (until the official store exists) | site | ✅ | S |
-| 61 | GitHub Action: build `.gmp` + `.mmpkg`, ABI check, attach to releases | CI | ✅ | S |
-| 62 | Input abstraction: same plugin works with button, head gestures, ring, gamepad | G + W lib | ✅ | S–M |
-| 63 | Cloud relay template (Workers + Durable Objects) for push-to-glasses from any webhook | +C | ✅ | S–M |
+**Blocked: request these from MemoMind instead of building them**
+- A custom launcher, a Quick Launch entry, or auto-starting plugins: you can't launch other apps from a plugin.
+- Reading or triaging notifications (no API).
+- A cursor X/Y stream ("underway").
+- Camera access ("future update").
+- A `bluetooth.ble` bridge and RSSI.
+- An agent/model field on the OpenClaw config page.
+- A Linux Studio.
+- Publishing and sharing plugins.
 
 ---
 
-## 6. Standout ideas worth building
+## 4. Ranked: bespoke plugins for you
 
-These combine a real, documented gap with something the SDK allows today:
+These are inferred from this Mac: the Agent Dashboard plugin and MemoMind MCP server, VREMS
+Zendesk/Statuspage work, Claude Code over Tailscale, ComfyUI, and RP and streaming Discord
+communities. Re-rank if the inferences are off.
 
-1. **Glasses MCP bridge + agent approval HUD (#10, #11).** Makes MemoMind a "head-up terminal" for
-   any AI agent: agents push status, ask yes/no, and you nod. Almost nobody has done this for
-   MemoMind; there are ~25 equivalents on Even G2, which proves demand. Small to build, and every
-   later AI plugin can reuse it.
-2. **Diarized, privacy-first captions (#1, #17).** Fixes MemoMind's two loudest criticisms at once:
-   captions that fall apart in groups, and "creepy" always-on recording. Push-to-capture, a visible
-   REC indicator, and data stored where the user chooses.
-3. **Bring-your-own assistant (#9).** The built-in AI gets called slow, and the community is already
-   hacking Gemini in. A clean, sanctioned Claude/GPT/Gemini plugin is an easy win.
-4. **`.gmp` desktop emulator + HUD-canvas library (#56, #57).** Developer tools that remove the
-   Windows/macOS-only Studio bottleneck and the hardest rendering work. High community value, and
-   good portfolio work.
-5. **Interruptibility scheduler (#14).** Uses IMU stillness, speech activity and calendar context to
-   time proactive cards, based on research such as ProMemAssist (UIST '25). It can sit under any
-   dashboard or assistant plugin.
+| Rank | Idea | Need | Feas. | Effort | Notes |
+|---|---|---|---|---|---|
+| 1 | **Agent Dashboard phase 4:** native `.gmp` with icons, **history scrolling and ring support**. This is the paged reader (community #6). | 5 | 4 | M | Phases 1–3 and 5 are done (status feed, nod/shake approvals, MCP `glasses_notify/ask/converse`, voice via audio.cpp, remote MCP connector). Phase 4 fixes exactly what people dislike about Terminal Mode and makes the project worth showing off. Needs the HUD kit (#2) and input abstraction (#4). |
+| 2 | **Help-desk HUD (Zendesk + Statuspage):** new urgent or escalated tickets, SLA countdowns, queue counts by view, an active-incident banner; ring cycles through cards, nod claims a ticket | 4–5 | 4 | M | Uses the Zendesk API through your own relay. **Show only ticket number, priority, subject and SLA, never voter or requester data.** Check your agency's IT/security policy before connecting work systems to a personal device or relay. |
+| 3 | **Long-job pinger:** ComfyUI queue done or failed, Claude sessions finished or blocked, the nightly KB update result, as one glanceable card each | 3 | 5 | S | Mostly hooks around the `glasses_notify` MCP tool you already have. Quick win. |
+| 4 | **Pocket KB lookup:** push-to-talk "why does import fail?" → search discord-kb (FIXES.md first) → answer card | 3 | 4 | S–M | Tests the voice kit (#3) and is useful while you develop. |
+| 5 | **RP second screen:** 10-code, penal-code and callsign lookup, a call timer, a quick-notes card | 3 | 3 | M | Lookups work anywhere. Live dispatch or MDT data only works on servers you run, since most RP servers ban client mods. |
+| 6 | **Stream companion:** chat highlights, follows and subs, a stream-health card | 2–3 | 5 | S | Only if you stream regularly (Twitch EventSub / YouTube). |
 
-## 7. What might suit you specifically
+---
 
-Based on your environment (academic-research tooling, Hugging Face, coding agents), these look
-like the best personal fits. Correct me if your use-case differs:
+## 5. Recommended sequence
 
-- **Research companion (#16, #8, #26):** voice-query your own notes/library, lecture captions with
-  glossary, and quick voice capture into your notes inbox.
-- **Agent HUD (#10, #11, #42):** keep an eye on Claude Code / CI runs while away from the screen.
-- **Reader + teleprompter (#19, #20):** read papers/notes or give talks hands-free.
+1. **OpenClaw Doctor (#C1).** Two days, high goodwill, no glasses needed.
+2. **HUD render kit + input abstraction (#C2, #C4)**, extracted while building **Agent Dashboard
+   phase 4 (#B1)**. Open-source the kit.
+3. **Voice I/O kit (#C3)**, once the background-capture app update ships. Use it for the
+   **Pocket KB lookup (#B4)**.
+4. **Help-desk HUD (#B2)** on top of the kit, after the policy check.
+5. **Long-job pinger (#B3)** whenever you have an hour.
+6. Plugin index + CI (#C7) once you have two or three plugins to list.
 
-## 8. Platform improvements to request from MemoMind
+Each bespoke plugin produces one of the community libraries, so building for yourself also fills
+the community's top gaps.
 
-Issues worth filing (or contributing upstream) because they unlock many ideas:
+## 6. Tech stack notes (still valid)
 
-1. Background execution for Web plugins (ambient captions, nav, reminders).
-2. Notification access API (read/filter/reply) with user consent.
-3. Audio playback/TTS API with explicit speaker routing.
-4. Persistent KV storage for `.gmp` (already on their list).
-5. Linux Desktop Studio build (or open-source the `.gmp` simulator).
-6. Wall-clock/time-zone in the native ABI.
-7. More LVGL widgets/fonts, custom font loading (CJK, icons).
-8. Network permission scoping by domain (privacy) — currently unscoped.
-9. A bystander-visible recording indicator (hardware) — the top privacy complaint.
-10. Public plugin signing + marketplace timeline.
-
-## 9. Suggested next steps
-
-0. Follow [`../GETTING_STARTED.md`](../GETTING_STARTED.md): run GM Breakout in Studio, then on
-   your glasses. Note that Studio refuses QR delivery without the `.review*` sidecars ("Missing
-   build review snapshot"), so builds must go through `build.py` with PyNaCl. Installed plugins
-   persist as saved entries in the App.
-1. **Pick 1–2 first projects** from §6 or §7.
-2. Set up the build in this repo: copy a starter from the SDK's `memomind-example-app` skill and get
-   `./build.py web` green here. Add the toolchain + PyNaCl for `glass` builds.
-3. Join the **Developer Workspace allowlist** (App ≥1.3.81) so you can install on your glasses.
-4. If you're on Linux, arrange a Windows/macOS machine for Desktop Studio, or build idea #56 first.
-5. Add CI (#61) so every push produces installable packages.
+- **Phone side:** vanilla JS/TS + esbuild/Vite, using PhoneSDK `gm-plugin-web-sdk.esm.js`. Never
+  ship API keys in `.mmpkg`; use a small relay (Cloudflare Workers / your Tailscale Mac) or a
+  user-entered key in `gm.storage`.
+- **STT:** Deepgram / AssemblyAI / OpenAI realtime, or whisper.cpp / audio.cpp locally (already
+  used in Agent Dashboard phase 5). Opus → PCM with `opus-decoder` (WASM) or `opusRecordingToOgg`.
+- **Glasses side:** C gnu99, xPack `riscv-none-elf-gcc`, CMake + Ninja, PyNaCl for review
+  sidecars. Static allocation, no blocking, stay well under 500 KiB.
+- **Relay:** Cloudflare Workers + Durable Objects, or the Tailscale-reachable Mac (already used by
+  memomind-terminal).
