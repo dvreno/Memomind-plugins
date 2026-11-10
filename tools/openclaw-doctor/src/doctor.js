@@ -57,7 +57,8 @@ export async function runDoctor(opts = {}, deps = {}) {
     else if (local.ok) add('fail', `Gateway NOT reachable on ${tsIp}:${port}`, [
       `TCP error: ${tp.error}.`,
       'It answers locally but not on the tailnet address, so it is probably bound to localhost only.',
-      "Change the gateway's bind address to the LAN/tailnet, or publish it with Tailscale Serve.",
+      'Bind it to the tailnet: `openclaw config set gateway.bind tailnet` and restart the gateway',
+      '(or `openclaw gateway run --bind tailnet`), or publish it with Tailscale Serve.',
     ]);
     else add('fail', `Gateway NOT reachable on ${tsIp}:${port}`, [`TCP error: ${tp.error}.`]);
   }
@@ -84,7 +85,19 @@ export async function runDoctor(opts = {}, deps = {}) {
     const detail = chat.detail ? [`Gateway said: ${chat.detail}`] : [];
     switch (chat.kind) {
       case 'ok':
-        add('ok', '/v1/chat/completions answers with model "openclaw"', [`HTTP ${chat.status}, stream started.`]);
+        add('ok', '/v1/chat/completions answers with model "openclaw"', [`HTTP ${chat.status}, the agent streamed text.`]);
+        break;
+      case 'no_text':
+        add('warn', '/v1/chat/completions accepted the request but streamed no text', [
+          'The gateway and token work. The agent ended its turn without replying, so check its model and the gateway logs (`openclaw logs`).',
+        ]);
+        break;
+      case 'provider_error':
+        add('fail', "The gateway and token work, but the agent can't reach its model", [
+          ...detail,
+          'OpenClaw opened the reply stream, then the agent failed. The app shows no answer.',
+          "Configure the agent's model provider and credentials (`openclaw configure`, or `openclaw models --help`), then rerun.",
+        ]);
         break;
       case 'multi_agent':
         add('fail', 'Multi-agent gateway: model "openclaw" is rejected (HTTP 400)', [
@@ -103,7 +116,8 @@ export async function runDoctor(opts = {}, deps = {}) {
       case 'not_found':
         add('fail', `/v1/chat/completions not found (HTTP ${chat.status})`, [
           ...detail,
-          "The gateway's OpenAI-compatible HTTP endpoint may be turned off. Enable it in your OpenClaw config (see the OpenClaw docs).",
+          "The gateway's OpenAI-compatible HTTP endpoint is off by default. Enable it with",
+          '`openclaw config set gateway.http.endpoints.chatCompletions.enabled true` (OpenClaw applies it without a restart).',
         ]);
         break;
       default:
@@ -123,18 +137,24 @@ export async function runDoctor(opts = {}, deps = {}) {
         '  openclaw nodes pending     →  openclaw nodes approve <nodeRequestId>',
       ]);
     } else {
-      for (const [label, r, listCmd, approve] of [
-        ['device', ap.devices, 'openclaw devices list', 'openclaw devices approve'],
-        ['node', ap.nodes, 'openclaw nodes pending', 'openclaw nodes approve'],
+      for (const [label, r, approve] of [
+        ['device', ap.devices, 'openclaw devices approve'],
+        ['node', ap.nodes, 'openclaw nodes approve'],
       ]) {
+        const listCmd = r.listCmd;
         if (!r.ok) { add('warn', `\`${listCmd}\` failed`, [r.stderr.trim()]); continue; }
         if (r.ids.length) {
           add('fail', `${r.ids.length} pending ${label} request(s). Approve them yourself:`, r.ids.map((id) => `  ${approve} ${id}`));
-        } else {
-          add('ok', `No pending ${label} requests found`, ['(Detected from the CLI output, which is shown below.)']);
         }
+        if (r.unidentified) {
+          add('fail', `${r.unidentified} pending ${label} request(s) without a recognisable ID`, [
+            `Run \`${listCmd}\` yourself, then \`${approve} <requestId>\`.`,
+          ]);
+        }
+        if (!r.ids.length && !r.unidentified) add('ok', `No pending ${label} requests`);
+        // JSON output is complete and unambiguous; only the text fallback is a guess worth showing.
         const raw = r.stdout.trim();
-        if (raw) add('info', `Raw output of \`${listCmd}\``, raw.split('\n').map((l) => `  ${l}`));
+        if (r.format === 'text' && raw) add('info', `Raw output of \`${listCmd}\` (IDs above were guessed from it)`, raw.split('\n').map((l) => `  ${l}`));
       }
     }
   }

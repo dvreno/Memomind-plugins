@@ -87,23 +87,76 @@ test('doctor flags an offline phone in the tailnet', async () => {
   assert.match(renderReport(report), /"pixel" \(android\) is OFFLINE/);
 });
 
-test('doctor prints approve commands for pending requests but never runs them', async () => {
+const doctorWith = (runner) => runDoctor(
+  { gateway: 'http://127.0.0.1:1', skipChat: true, skipTailscale: true },
+  { tcpProbe: async () => ({ ok: true, ms: 1 }), pendingApprovals: () => pendingApprovals(runner) },
+);
+
+test('doctor reads --json, prints approve commands, and never runs them', async () => {
   const calls = [];
   const runner = async (cmd, args) => {
     calls.push([cmd, ...args].join(' '));
-    if (args[0] === 'devices') return { ok: true, stdout: 'ID        STATUS   NAME\nreq7f3a9c  pending  MemoMind-Pixel\nabc12345  paired   laptop\n', stderr: '' };
-    return { ok: true, stdout: 'node-9b2e41  memomind.control  requested 2m ago\n', stderr: '' };
+    if (args[0] === 'devices') {
+      // Shape captured from OpenClaw 2026.11.2 (`paired` entry trimmed).
+      return { ok: true, stderr: '', stdout: JSON.stringify({ pending: [{ requestId: 'req7f3a9c', displayName: 'MemoMind-Pixel' }], paired: [{ deviceId: 'abc12345', displayName: 'laptop' }] }) };
+    }
+    return { ok: true, stderr: '', stdout: JSON.stringify([{ requestId: 'node-9b2e41' }]) };
   };
-  const report = await runDoctor(
-    { gateway: 'http://127.0.0.1:1', skipChat: true, skipTailscale: true },
-    { tcpProbe: async () => ({ ok: true, ms: 1 }), pendingApprovals: () => pendingApprovals(runner) },
-  );
-  const text = renderReport(report);
+  const text = renderReport(await doctorWith(runner));
   assert.match(text, /openclaw devices approve req7f3a9c/);
   assert.match(text, /openclaw nodes approve node-9b2e41/);
   assert.ok(!text.includes('devices approve abc12345'), 'already-paired device must not be listed');
-  assert.deepEqual(calls, ['openclaw devices list', 'openclaw nodes pending']);
+  assert.deepEqual(calls, ['openclaw devices list --json', 'openclaw nodes pending --json']);
   assert.ok(calls.every((c) => !c.includes('approve')), 'doctor must never approve');
+});
+
+test('doctor never says "nothing pending" when a pending entry has an unknown ID field', async () => {
+  const runner = async (_cmd, args) => ({
+    ok: true, stderr: '',
+    stdout: args[0] === 'devices' ? JSON.stringify({ pending: [{ ticket: 'x' }], paired: [] }) : '[]',
+  });
+  const text = renderReport(await doctorWith(runner));
+  assert.match(text, /1 pending device request\(s\) without a recognisable ID/);
+  assert.ok(!/No pending device requests/.test(text));
+});
+
+test('doctor falls back to the text table when --json is rejected', async () => {
+  const calls = [];
+  const runner = async (_cmd, args) => {
+    calls.push(args.join(' '));
+    if (args.includes('--json')) return { ok: false, stdout: '', stderr: "error: unknown option '--json'" };
+    if (args[0] === 'devices') return { ok: true, stdout: 'ID        STATUS   NAME\nreq7f3a9c  pending  MemoMind-Pixel\nabc12345  paired   laptop\n', stderr: '' };
+    return { ok: true, stdout: 'node-9b2e41  memomind.control  requested 2m ago\n', stderr: '' };
+  };
+  const text = renderReport(await doctorWith(runner));
+  assert.match(text, /openclaw devices approve req7f3a9c/);
+  assert.match(text, /openclaw nodes approve node-9b2e41/);
+  assert.match(text, /IDs above were guessed/);
+  assert.deepEqual(calls, ['devices list --json', 'devices list', 'nodes pending --json', 'nodes pending']);
+});
+
+test('chatProbe: 200 stream with an in-stream error is a provider_error, not ok', async () => {
+  const gw = await startMockGateway({ mode: 'single', noProvider: true });
+  try {
+    const r = await chatProbe(gw.url, {});
+    assert.equal(r.kind, 'provider_error');
+    assert.equal(r.status, 200);
+    assert.match(r.detail, /No route-compatible authentication source/);
+  } finally { await gw.close(); }
+});
+
+test('doctor tells a provider problem apart from a bad token', async () => {
+  const gw = await startMockGateway({ mode: 'single', token: 'tok-1234567', noProvider: true });
+  try {
+    const report = await runDoctor(
+      { gateway: gw.url, token: 'tok-1234567', tailscaleIp: '127.0.0.1', skipCli: true },
+      { tailscaleInfo: noTs },
+    );
+    const text = renderReport(report);
+    assert.match(text, /The gateway and token work, but the agent can't reach its model/);
+    assert.ok(!/refused the token/.test(text));
+    assert.equal(exitCode(report), 1);
+  } finally { await gw.close(); }
 });
 
 test('doctor explains what to run when the openclaw CLI is missing', async () => {

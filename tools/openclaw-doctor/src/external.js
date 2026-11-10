@@ -3,9 +3,12 @@
 // We only ever run LIST commands here. Approve commands are printed for the
 // user to run themselves; this tool never approves anything.
 //
-// The openclaw commands below are the ones documented in the MemoMind Discord
-// (`openclaw devices list`, `openclaw nodes pending`). No flags are added
-// because their flags couldn't be verified against an installed CLI.
+// Verified against `openclaw --help` on OpenClaw 2026.11.2:
+//   openclaw devices list --json   → { pending: [...], paired: [...] }
+//   openclaw nodes pending --json  → [ ... ]
+//   openclaw devices approve [requestId], openclaw nodes approve <requestId>
+// The plain-text tables wrap long IDs across lines, so JSON is parsed first and
+// the text heuristic is only a fallback for CLIs that reject --json.
 import { execFile } from 'node:child_process';
 
 /** Default runner: resolves { ok, stdout, stderr, missing } and never throws. */
@@ -41,15 +44,42 @@ export function extractRequestIds(output, { pendingOnly }) {
   return [...ids];
 }
 
+// The ID that `approve` takes is called requestId in the CLI help. The JSON
+// field name for a *pending* entry wasn't observable (loopback clients are
+// approved silently), so accept the likely names in order.
+const ID_FIELDS = ['requestId', 'id', 'deviceId', 'nodeId'];
+const idOf = (entry) => ID_FIELDS.map((f) => entry?.[f]).find((v) => typeof v === 'string' && v);
+
+/**
+ * Parse `--json` output. Returns { ids, unidentified } or null if it isn't the
+ * expected JSON. `unidentified` counts pending entries with no recognisable ID,
+ * so the doctor never reports "nothing pending" when something is.
+ */
+export function pendingIdsFromJson(stdout, kind) {
+  let j;
+  try { j = JSON.parse(stdout); } catch { return null; }
+  const list = kind === 'devices' ? j?.pending : j;
+  if (!Array.isArray(list)) return null;
+  const ids = list.map(idOf).filter(Boolean);
+  return { ids, unidentified: list.length - ids.length };
+}
+
+async function listPending(runner, args, kind) {
+  let r = await runner('openclaw', [...args, '--json']);
+  if (r.missing) return { missing: true };
+  const parsed = r.ok ? pendingIdsFromJson(r.stdout, kind) : null;
+  if (parsed) return { ...r, ...parsed, format: 'json', listCmd: `openclaw ${args.join(' ')}` };
+  // Older CLI without --json (or unexpected shape): fall back to the text table.
+  r = await runner('openclaw', args);
+  const textIds = r.ok ? extractRequestIds(r.stdout, { pendingOnly: kind === 'devices' }) : [];
+  return { ...r, ids: textIds, unidentified: 0, format: 'text', listCmd: `openclaw ${args.join(' ')}` };
+}
+
 export async function pendingApprovals(runner = run) {
-  const devices = await runner('openclaw', ['devices', 'list']);
+  const devices = await listPending(runner, ['devices', 'list'], 'devices');
   if (devices.missing) return { cliMissing: true };
-  const nodes = await runner('openclaw', ['nodes', 'pending']);
-  return {
-    cliMissing: false,
-    devices: { ...devices, ids: devices.ok ? extractRequestIds(devices.stdout, { pendingOnly: true }) : [] },
-    nodes: { ...nodes, ids: nodes.ok ? extractRequestIds(nodes.stdout, { pendingOnly: false }) : [] },
-  };
+  const nodes = await listPending(runner, ['nodes', 'pending'], 'nodes');
+  return { cliMissing: false, devices, nodes };
 }
 
 /**

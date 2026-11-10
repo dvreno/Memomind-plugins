@@ -45,8 +45,8 @@ Leave the Gateway WS URL and Access Token as they are.
 | 1 | Gateway reachable on this machine | TCP connect to `--gateway` (default `http://127.0.0.1:18789`) |
 | 2 | Gateway reachable over Tailscale, the way the phone sees it | TCP connect to this machine's Tailscale IP (from `tailscale status --json`, or `--tailscale-ip`) |
 | 3 | Phone is online in the tailnet | iOS/Android peers in `tailscale status --json` and their `Online` flag |
-| 4 | `/v1/chat/completions` answers | One streaming POST with `model: "openclaw"`, like the app sends. It reads the first chunk, then hangs up. Detects `400 Multiple agents are configured…`, 401/403 and 404 |
-| 5 | Pending device and node approvals | Runs `openclaw devices list` and `openclaw nodes pending`, then prints `openclaw devices approve <requestId>` and `openclaw nodes approve <nodeRequestId>` for you to run |
+| 4 | `/v1/chat/completions` answers | One streaming POST with `model: "openclaw"`, like the app sends. It reads until the agent's first text or error, then hangs up. Detects `400 Multiple agents are configured…`, an agent with no working model (OpenClaw reports that *inside* a 200 stream), a bad token (401 `unauthorized`), and a disabled endpoint (404) |
+| 5 | Pending device and node approvals | Runs `openclaw devices list --json` and `openclaw nodes pending --json`, then prints `openclaw devices approve <requestId>` and `openclaw nodes approve <requestId>` for you to run. Falls back to the text output on a CLI without `--json` |
 | 6 | App settings | Prints the Gateway WS URL and SSE chat URL to use (the proxy URL when needed) |
 
 The exit code is `1` if any check fails and `0` otherwise.
@@ -72,9 +72,10 @@ proxy   --listen <ip> (required)  --port <n> (18795)  --upstream <url>
 | "Initialization returned false" with a `100.x` or `*.ts.net` address | **Tailscale is off on the phone**, so the address never resolves | Turn Tailscale on in the phone app and keep it on. A Wi-Fi ⇄ cellular switch can drop the link for about 45 s. `doctor` flags phones that show as offline. |
 | Gateway logs say "node command surface withheld" | The device is approved but the node isn't | `openclaw nodes pending`, then `openclaw nodes approve <nodeRequestId>` |
 | Your words show on the glasses but **no answer arrives** | Multi-agent gateway: the app sends `model: "openclaw"` and gets `400 Multiple agents are configured, but this operation has no explicit owner.` The app hides the error. | Run `openclaw-doctor proxy` and point the **SSE chat URL** at it. The proxy rewrites the model to `openclaw/<agent>`. |
-| `doctor`: reachable locally but **not on the Tailscale IP** | The gateway listens on localhost only | Change the gateway's bind address to your LAN or tailnet, or publish it with Tailscale Serve (`wss://…ts.net`) |
-| `doctor`: `/v1/chat/completions` returns 401/403 | Wrong token | Use the gateway's auth token or password, the same one as the app's Access Token |
-| `doctor`: `/v1/chat/completions` returns 404 | The gateway's OpenAI-compatible HTTP endpoint is off | Enable it in your OpenClaw config (see the OpenClaw docs) |
+| `doctor`: reachable locally but **not on the Tailscale IP** | The gateway listens on localhost only (the default bind is `loopback`) | `openclaw config set gateway.bind tailnet` and restart the gateway, or publish it with Tailscale Serve (`wss://…ts.net`) |
+| `doctor`: "the gateway and token work, but the agent can't reach its model" | The agent has no model provider or credentials. OpenClaw still answers `200` and reports the failure inside the stream, so the app shows nothing | Set up the agent's model (`openclaw configure`), then rerun `doctor` |
+| `doctor`: `/v1/chat/completions` refused the token (401/403) | Wrong token | Use the gateway's auth token or password, the same one as the app's Access Token |
+| `doctor`: `/v1/chat/completions` returns 404 | The OpenAI-compatible HTTP endpoint is off, which is OpenClaw's default | `openclaw config set gateway.http.endpoints.chatCompletions.enabled true` (applies without a restart) |
 | The proxy says **"Refusing to bind 0.0.0.0"** | This is on purpose. The proxy forwards your token to the gateway. | Pass your Tailscale `100.x` IP (or LAN IP) to `--listen` |
 | Proxy log shows `502 upstream error` | The proxy can't reach the gateway | Check `--upstream` (default `http://127.0.0.1:18789`) and that the gateway is running |
 | Chat messages never reach OpenClaw, with no HTTP request at all | Unknown. Reported in Discord with no staff answer. | Check that **Enable OpenClaw** is on and that the SSE URL ends in `/v1/chat/completions`. Then send in-app feedback with logs (Profile → Feedback → Upload Logs). |
@@ -92,10 +93,15 @@ proxy   --listen <ip> (required)  --port <n> (18795)  --upstream <url>
 
 ## Caveats
 
-- `openclaw` wasn't installed while this was written, so the CLI commands come from
-  the Discord, not from `openclaw --help`. The tool passes no extra flags.
-  Request IDs are pulled from the plain-text output heuristically, so the raw
-  output is always printed too.
+- Checked against a real **OpenClaw 2026.11.2** gateway on macOS: the command
+  names and `--json` flags (from `openclaw --help`), the exact multi-agent 400,
+  that `openclaw/<agent>` fixes it through the proxy, the in-stream provider
+  error, the 401 and 404 bodies, and the config keys in the hints.
+- Not yet observed: a *pending* request in `--json` output. Clients on loopback
+  with the gateway token are approved silently, so none could be produced
+  locally. The doctor accepts `requestId`, `id`, `deviceId` or `nodeId`, and
+  flags any pending entry it can't read instead of reporting "nothing pending".
+- The phone path (Test Connection over Tailscale) hasn't been run against it yet.
 - The `*.ts.net` / Tailscale Serve path (`wss://`) is handled by passing
   `--gateway https://<host>.ts.net`. It was tested only with mocks.
 
