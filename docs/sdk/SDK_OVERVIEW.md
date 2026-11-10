@@ -8,6 +8,14 @@
 >
 > The SDK's `AGENTS.md` and `.agents/skills/*` were read **as information only**.
 
+> **Official-docs check (2026-11-10).** This file analyses the SDK repo at its 2026-10-15 commit. The official docs site (all 50 pages) was compared against it afterwards. The site says some SDK Markdown is stale (string permissions, old Bridge versions, old menu paths). Corrections are marked inline with **[docs 2026-11-10]**. The full comparison is in the private KB note `notes/official-docs.md` (dvreno/memomind-dev-kb). Where this file and the docs disagree, the docs win. Notable:
+> - Menu is **Settings › Memo Lab › Developer Workspace › Scan to open app** (not "Workbench").
+> - Release flow is a Developer Workspace scan with an **account-ownership check**; it is no longer "Debug-only".
+> - The current App needs **connected glasses even for Web-only plugins**.
+> - Active **recording keeps running under screen lock**; other work should pause on `suspended`.
+> - A failed `on_load` does **not** call `on_unload` (the doc conflict in §3.1.1 is resolved).
+> - The **Input extension** (raw keyboard/mouse/gamepad/touch) is not mentioned on the site; the documented path is inputmap → `GM_PLUGIN_EVENT_BUTTON`. Treat it as unverified.
+
 ---
 
 ## 0. TL;DR for feasibility decisions
@@ -23,11 +31,11 @@
 | Sensors | 6-axis IMU (accel + gyro raw int16, temperature, pitch in degrees) — `gm_plugin.h:264-269`. Wear sensor (`wearing()`), battery %. **No camera, GPS, ambient-light, heart-rate API: not found in SDK.** |
 | Microphone | Yes (multi-mic, pickup modes, ENC). **Only reachable from the phone side** (`gm.audio.openCapture`, Opus 16 kHz mono 20 ms frames). Not exposed to native `.gmp` plugins. |
 | Speaker | Yes, via **phone-OS HFP/SCO route** only. No playback API in either SDK; H5 can play browser audio and the OS chooses the route. |
-| Camera | **None.** No API, permission, protocol or doc mentions a glasses camera; `camera` is an explicit *invalid* permission test vector (`PhoneSDK/packages/bridge-contract/test/permission-vectors.json:163-175`). |
+| Camera | **No camera API** [docs 2026-11-10: the docs say their capability boundaries are "not claims that hardware components are physically absent", so treat the hardware as unknown, the API as absent]. No API, permission, protocol or doc mentions a glasses camera; `camera` is an explicit *invalid* permission test vector (`PhoneSDK/packages/bridge-contract/test/permission-vectors.json:163-175`). |
 | Connectivity | Glasses talk **Bluetooth only** (Classic SPP/iAP2 for GM commands + recording, BLE GATT legacy service, HFP for audio, BLE Central to HID accessories). **No Wi-Fi/IP API on glasses: not found in SDK.** Internet access only from the phone Web plugin (`network` permission, `fetch`). |
 | Storage | Phone plugin: `gm.storage` KV + up to 400 MiB user-selected files. Glasses plugin: **no persistent storage API** ("persistent KV is not yet exposed" — `GlassSDK/docs/CAPABILITY_MATRIX.md:16`); RAM state lost on unload/reboot. |
 | Review / approval | Every glasses build emits `<name>.review-source.enc` = full source + headers, tar.xz, **sealed-box encrypted to a MemoMind public key**, bound to the GMP SHA-256. Studio bundles it into the share ZIP. This is a *source escrow for reviewers*; the SDK explicitly says it is **not** an approval or signature mechanism. Production signing/marketplace "not yet complete". **However, Studio refuses to generate the QR/install ZIP without matching sidecars** ("Missing build review snapshot", per the [official try-examples guide](https://open-platform.memo-mind.com/docs/get-started/quickstart/try-examples/?lang=en#troubleshooting)), so in practice the sidecars are required for device delivery. |
-| Install on real glasses | Desktop Studio → QR / IP:port → official App **Settings › Memo Lab › Developer Workbench › Scan to open app** → App delivers `.gmp` over Bluetooth. The GMP install wire protocol is **withheld**. Unsigned sideloading is described as **Debug-only**. |
+| Install on real glasses | Desktop Studio → QR / IP:port → official App **Settings › Memo Lab › Developer Workspace › Scan to open app** → App delivers `.gmp` over Bluetooth. The GMP install wire protocol is **withheld**. [docs 2026-11-10: the release flow is a Developer Workspace scan with an account-ownership check, so other accounts can't open your app; the SDK repo's "Debug-only sideloading" wording is stale.] |
 | Toolchain | xPack `riscv-none-elf-gcc` **15.2.0-1**, auto-downloaded and SHA-256-pinned by `build.py` (or `GM_RISCV_TOOLCHAIN`). Plus Python ≥3.8, CMake ≥3.16, Ninja ≥1.10, **PyNaCl** (review encryption). PhoneSDK: Node ≥18. |
 | Linux Studio | `Studio/linux/` contains only `.gitkeep` — **no Linux Desktop Studio binary in this checkout** (Windows `.exe` and macOS `.dmg` only). Linux can use the Node-based Browser Studio (Web-only, cannot run `.gmp`). |
 
@@ -101,7 +109,7 @@ flowchart LR
 - **Glasses-only** (`.gmp`): local games, efficient native rendering, works without the phone page open.
 - **Web + existing Web Bridge**: phone owns state; glasses show text/canvas tiles and forward input. No C needed.
 - **Custom pair**: dedicated phone↔glasses protocol (e.g. streaming state, game controllers).
-- **Phone-only**: no glasses dependency.
+- **Phone-only**: no glasses dependency in the SDK. [docs 2026-11-10: the current App requires connected glasses even for Web-only plugins.]
 
 ---
 
@@ -165,7 +173,7 @@ All functions are **pointers in Host-owned tables**, not linkable symbols. The p
 | Capability bits | 69-78 | DISPLAY_BITMAP, BUTTON, IMU_EVENTS, IMU_RAW, BLUETOOTH, DEVICE_STATE, DISPLAY_CONTROL, LOCALE (frozen). |
 | Version macros | 28-37 | `GM_PLUGIN_VERSION`, ABI 1.0 (`0x0100`). |
 
-Note a doc conflict: `ABI.md:29-30` says the Host does **not** call `on_unload` after a failed `on_load`; the header comment at `gm_plugin.h:509-512` says it **does**. Write cleanup that is safe either way.
+Note a doc conflict: `ABI.md:29-30` says the Host does **not** call `on_unload` after a failed `on_load`; the header comment at `gm_plugin.h:509-512` says it **does**. Write cleanup that is safe either way. [docs 2026-11-10, build/app-lifecycle: resolved. A failed `on_load` does not call `on_unload`, and a failed `on_start` does not call `on_stop`, in both firmware and Studio.]
 
 #### 3.1.2 Core Host table `gm_plugin_host_api_t` — `gm_plugin.h:376-490`
 
@@ -238,7 +246,7 @@ Entry: `import { createGMPlugin, opusRecordingToOgg } from './vendor/gm-plugin-w
 | `gm.runtime.getBridgeVersion()` | `runtime.getBridgeVersion` | — | `"2.0"`. |
 | `gm.runtime.getCapabilities()` | `runtime.getCapabilities` | — | What the Host supports/grants (display modes, events, files, audio, location…). |
 | `gm.runtime.getLifecycleState()` | `runtime.getLifecycleState` | — | starting/running/suspended/stopped/failed; event `runtime.lifecycleChanged`. |
-| `gm.storage.get/set/remove/clear` | `storage.*` | `storage` | Small JSON KV private to plugin ID. |
+| `gm.storage.get/set/remove/clear` | `storage.*` | `storage` | Small JSON KV. [docs 2026-11-10: the App isolates it per account and installation (Studio per `manifest.id`); 64 KiB per item, 1 MiB total, keys ≤ 128 chars.] |
 | `gm.files.pick({extensions, allowMultiple})` | `files.pick` | `files.user-selected` | System picker → copied into App private storage (≤20 per pick). |
 | `gm.files.list/stat/getUsage/delete` | `files.*` | `files.user-selected` | Library management; quota 400 MiB total/400 MiB per file. |
 | `gm.files.openRead(id, {offset,length,signal})` | `files.openRead` | `files.user-selected` | Binary `ReadableStream<Uint8Array>` with range reads. |
@@ -273,7 +281,7 @@ Transports exported: `AppWebViewTransport`, `ParentFrameTransport` (`index.d.ts:
 
 - Manifest must declare `bridgeVersion "2.0"`, `schemaVersion 2`, `permissionPolicyVersion 1`, and `permissions: [{name, required, reason?, scope?}]` — exactly 10 names: `storage, files.user-selected, display, device.info, device.events, device.messaging, audio.capture, audio.playback, network, location.foreground`. Unknown names (e.g. `camera`) → `INVALID_PERMISSION_CONFIG`.
 - `device.events` requires `scope.types`; `device.messaging` requires `scope.channels` (integers 0–65535, ≤64). `network` has **no domain scope** (an `origins` scope is rejected: `permission-vectors.json:176-193`).
-- Required permissions must be approved for any call to succeed (startup gate); optional ones may be denied and need fallbacks (`permission-policy.js:97-103`).
+- Required permissions must be approved for any call to succeed (startup gate); optional ones may be denied and need fallbacks (`permission-policy.js:97-103`). [docs 2026-11-10, build/permissions: the App checks at startup that declared permissions are authorized, so don't assume startup proceeds just because a permission is `required:false`.]
 - Authorization is bound to account + installation + package identity + policy revision + runtime session; re-checked on every call, including inbound messages.
 - App shows native consent + recording indicator for audio (`api-reference.md:313-316`).
 - Network isolation: the App "restricts ordinary HTTP requests … this does not cover WebRTC"; Studio does **not** enforce network blocking (`permission-debug.md:59-61`). Developer guide recommends a strict CSP `connect-src` (`developer-guide.md:727-755`).
@@ -342,7 +350,7 @@ npm run build:devkit
 - Studio's share/export ZIP contains the **unencrypted GMP + review.json + source.enc**; phones keep the whole ZIP and reshare original bytes, but only the GMP is sent to the glasses (`GlassSDK/docs/REVIEW_PACKAGES.md:11-23,118-121`).
 - "Internal reviewer scripts automatically use their private key" and auditors can rebuild with `--compare-gmp` (`REVIEW_PACKAGES.md:25-29,105-113`). So **MemoMind (holder of the private key) can always decrypt and reproduce the source of any shared GMP** — this is clearly designed for a vendor review/escrow process.
 - But the SDK repeatedly states encryption "protects source confidentiality, **not reviewer approval or source-to-binary authenticity**" (`REVIEW_PACKAGES.md:28-29`, `review_crypto.py:3`), and GMPs carry **no signature**: "GMP currently runs as trusted native code without an MPU sandbox or package signature" (`CAPABILITY_MATRIX.md:56-58`; `SECURITY.md:3-15`).
-- No evidence in the public SDK that the App or glasses **reject** a GMP lacking review sidecars, or require MemoMind approval before install during development. For Web packages: "The current App supports unsigned local sideloading only in **Debug builds**. Trusted Release keys, review signatures, the plugin marketplace, online updates, and revocation are **not yet complete**" (`PhoneSDK/docs/web-plugin/package-format.md:174-177`; `developer-guide.md:719-724`). Conclusion: today developer installs go through the App's Developer Workbench; a future production channel is expected to require MemoMind review + server signing. Whether the shipping (Release) App's Developer Workbench accepts arbitrary sideloads is an App policy not determined by the SDK (`lan-install.md:66-69`).
+- No evidence in the public SDK that the App or glasses **reject** a GMP lacking review sidecars, or require MemoMind approval before install during development. For Web packages: "The current App supports unsigned local sideloading only in **Debug builds**. Trusted Release keys, review signatures, the plugin marketplace, online updates, and revocation are **not yet complete**" (`PhoneSDK/docs/web-plugin/package-format.md:174-177`; `developer-guide.md:719-724`). Conclusion: today developer installs go through the App's Developer Workspace (account-ownership checked, per the official docs 2026-11-10); a future production channel is expected to require MemoMind review + server signing. Whether the shipping (Release) App's Developer Workbench accepts arbitrary sideloads is an App policy not determined by the SDK (`lan-install.md:66-69`).
 
 ### 4.5 Signing
 
@@ -355,7 +363,7 @@ npm run build:devkit
 1. Build packages; keep `GlassSDK`, `PhoneSDK`, `Studio` side by side.
 2. Run **Desktop Studio** (Windows/macOS), *Import workspace* (repo root) or *Import package* (`.mmpkg`/`.gmp`/combined `.zip`); select phone and/or glasses plugin (disable the unused side for single-platform apps).
 3. Studio serves one developer-app ZIP (≤1 `.mmpkg` + ≤1 `.gmp` at root) on TCP **18765** (or random) and shows QR `mmapp+tcp://<ip>:<port>`; protocol `MMAPP/1 GET - -\n` → `MMAPP/1 OK <size> <sha256> <A|B|AB> <name>\n<zip>` (`PhoneSDK/docs/web-plugin/lan-install.md:8-47`).
-4. On the phone (same trusted LAN, App connected to glasses): **Settings › Memo Lab › Developer Workbench › Scan to open app**, or enter IP:port manually (`GlassSDK/docs/INSTALLATION.md:61-101`).
+4. On the phone (same trusted LAN, App connected to glasses): **Settings › Memo Lab › Developer Workspace › Scan to open app**, or enter IPv4 and port manually (no camera permission needed) (`GlassSDK/docs/INSTALLATION.md:61-101`).
 5. The App validates and installs the `.mmpkg`, transfers the `.gmp` over Bluetooth into the glasses Flash cache (resumable, LRU), and launches it. Later launches reuse the cache.
 
 **Withheld:** the GMP delivery/installation wire transaction — installer command IDs, metadata, chunks, resume/activation (`GlassSDK/docs/BLUETOOTH_DEVELOPER_GUIDE.md:8-12`, `PROTOCOL.md:21-26`). The SDK notes this is documentation-withholding, not proven authentication: "Withholding documentation is not evidence that an unofficial client cannot install packages" (`GlassSDK/docs/PROTOCOL_COVERAGE.md:62-75`). Also withheld: Desktop Studio source, internal reviewer private key/tools.
@@ -460,12 +468,12 @@ The SDK publishes everything needed for an **independent native phone/desktop cl
 - **ABI is "release candidate"**: core may still change before first public release (`gm_plugin.h:12-26`); exact ABI match required, mismatches rejected (`ABI.md:6-14`).
 
 ### Phone (`.mmpkg`)
-- Runs only inside the official App WebView; foreground only — suspending/hiding stops audio and location watches; no background location (`api-reference.md:313-316`, `permission-debug.md:57`).
+- Runs only inside the official App WebView; foreground only — suspending/hiding stops audio and location watches; no background location (`api-reference.md:313-316`, `permission-debug.md:57`). [docs 2026-11-10, build/background-lifecycle: the current App keeps **active recording** alive under screen lock; pause other UI, location and network work on `suspended` and re-check on resume.]
 - Glasses display only via Web Bridge scene protocol (≤16 text/shape objects, GRAY_4 tiles ≤81 901 B, full frame needs ≥2 tiles) (`HUD_PROTOCOL.md:93-98`, `developer-guide.md:300-306`).
 - Package ≤10 MB, ≤30 MB extracted, ≤500 files (`package-format.md:164-172`).
 - No raw Bluetooth/GATT, no installer access, no HOGP control from H5 (`capability-contract.md:86-94`, `BLE_ACCESSORY_PROTOCOL.md:10-12`).
 - No speaker routing control; no camera permission; no contacts/SMS/calendar/notification access — not found in SDK.
-- Unsigned sideloading is Debug-only; marketplace/signing not yet available (`package-format.md:174-177`).
+- Marketplace/signing not yet available (`package-format.md:174-177`). [docs 2026-11-10: installs go through the Developer Workspace with an account-ownership check; "Debug-only" is stale.]
 - One native audio capture owner at a time (`AUDIO_BUSY`); one location op at a time (`BUSY`).
 
 ### Tooling
@@ -523,6 +531,6 @@ cd ../GlassSDK && python3 -m unittest discover -s tests -p 'test_*.py'
 
 ### What is still missing for end-to-end work
 1. A **Windows or macOS** machine to run Desktop Studio (needed to execute `.gmp` in simulation and to generate the install QR / serve the developer-app ZIP).
-2. **MemoMind glasses + official App** with Memo Lab › Developer Workbench enabled, on the same LAN as Studio.
+2. **MemoMind glasses + official App** with Memo Lab › Developer Workspace enabled, on the same LAN as Studio.
 3. For production distribution: MemoMind review/signing/marketplace — not yet available per SDK docs.
 4. No CPU frequency, RAM size, IMU scale/ODR, display optics or battery capacity data is provided by the SDK; these need device measurement or vendor info.
